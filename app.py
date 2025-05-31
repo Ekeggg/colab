@@ -4,7 +4,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
+import gdown
+import os
+import warnings
+warnings.filterwarnings("ignore")
 
+file_id = "1n7cREgviHR9PJjMZtgverCPIB3F1blm2"
+output_path = "filled_output.csv"
+if not os.path.exists(output_path):
+    gdown.download(f"https://drive.google.com/uc?id={file_id}", output_path, quiet=False)
 
 st.title("Clustering Analysis of Temperature Data")
 #csv file path
@@ -26,9 +34,7 @@ enso_labels = {
     1905: "E", 1904: "N", 1903: "N", 1902: "E", 1901: "N", 1900: "N", 1899: "N", 1898: "N",
     1897: "N", 1896: "E", 1895: "N", 1894: "N", 1893: "L", 1892: "L", 1891: "N", 1890: "N"
 }
-uploaded_file = "C:/Users/kim779146/Documents/filled_output.csv"
-chunk_iter = pd.read_csv(uploaded_file,chunksize=50000)
-df = pd.concat(chunk_iter, ignore_index=True)
+df= pd.read_csv(output_path)
 df['temp_smooth'] = df['temperature'].rolling(window=3, center=True).mean()
 st.write(df.head())  
 X = df[['latitude', 'longitude', 'month', 'temp_smooth']]
@@ -38,6 +44,7 @@ clustering_df = df[(df['year'] >= 1890) & (df['year'] <= 2017)]
 
 # keep only years that are in the ENSO labels
 clustering_df = clustering_df[clustering_df['year'].isin(enso_labels.keys())]
+clustering_df = clustering_df.copy()
 clustering_df['enso_label'] = clustering_df['year'].map(enso_labels)
 clustering_df = clustering_df[clustering_df['month'].isin([12, 1, 2])]
 clustering_df = clustering_df[clustering_df['enso_label'].isin(['E', 'L'])]
@@ -66,7 +73,7 @@ pivot['cluster'] = kmeans.fit_predict(X_scaled)
 # Plot the clustering results
 st.subheader(f'Cluster Map with k=6')
 fig, ax = plt.subplots()
-scatter = ax.scatter(df['longitude'], df['latitude'], c=pivot['cluster'], cmap='viridis', s=1)
+scatter = ax.scatter(pivot['longitude'], pivot['latitude'], c=pivot['cluster'], cmap='viridis', s=1)
 plt.xlabel('Longitude')
 plt.ylabel('Latitude')
 plt.colorbar(scatter, label='Cluster')
@@ -74,4 +81,4 @@ st.pyplot(fig)
 
 # Show statistics
 st.subheader('Cluster Statistics')
-st.write(df.groupby('cluster').describe())
+st.write(pivot.groupby('cluster')[['enso_E', 'enso_L']].describe())
