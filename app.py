@@ -13,7 +13,8 @@ file_id = "1n7cREgviHR9PJjMZtgverCPIB3F1blm2"
 output_path = "filled_output.csv"
 if not os.path.exists(output_path):
     gdown.download(f"https://drive.google.com/uc?id={file_id}", output_path, quiet=False)
-
+chunk_iter = pd.read_csv(output_path, chunksize=100000)
+df = pd.concat(chunk_iter)
 st.title("Clustering Analysis of Temperature Data")
 #csv file path
 enso_labels = {
@@ -34,7 +35,6 @@ enso_labels = {
     1905: "E", 1904: "N", 1903: "N", 1902: "E", 1901: "N", 1900: "N", 1899: "N", 1898: "N",
     1897: "N", 1896: "E", 1895: "N", 1894: "N", 1893: "L", 1892: "L", 1891: "N", 1890: "N"
 }
-df= pd.read_csv(output_path)
 df['temp_smooth'] = df['temperature'].rolling(window=3, center=True).mean()
 st.write(df.head())  
 X = df[['latitude', 'longitude', 'month', 'temp_smooth']]
