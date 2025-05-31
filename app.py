@@ -13,8 +13,9 @@ file_id = "1n7cREgviHR9PJjMZtgverCPIB3F1blm2"
 output_path = "filled_output.csv"
 if not os.path.exists(output_path):
     gdown.download(f"https://drive.google.com/uc?id={file_id}", output_path, quiet=False)
-chunk_iter = pd.read_csv(output_path, chunksize=100000)
-df = pd.concat(chunk_iter)
+    with st.spinner('Loading data...'):
+        chunk_iter = pd.read_csv(output_path, chunksize=100000)
+        df = pd.concat(chunk_iter)
 st.title("Clustering Analysis of Temperature Data")
 #csv file path
 enso_labels = {
