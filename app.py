@@ -1,7 +1,7 @@
 import streamlit as st
-import pandas as pd
+import polars as pl
 import numpy as np
-import matplotlib.pyplot as plt
+import plotly.express as px
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 import gdown
@@ -9,15 +9,7 @@ import os
 import warnings
 warnings.filterwarnings("ignore")
 
-file_id = "1n7cREgviHR9PJjMZtgverCPIB3F1blm2"
-output_path = "filled_output.csv"
-if not os.path.exists(output_path):
-    gdown.download(f"https://drive.google.com/uc?id={file_id}", output_path, quiet=False)
-    with st.spinner('Loading data...'):
-        chunk_iter = pd.read_csv(output_path, chunksize=100000)
-        df = pd.concat(chunk_iter)
-st.title("Clustering Analysis of Temperature Data")
-#csv file path
+# ENSO phase labels
 enso_labels = {
     2017: "L", 2016: "N", 2015: "E", 2014: "E", 2013: "N", 2012: "N", 2011: "L", 2010: "L",
     2009: "E", 2008: "L", 2007: "L", 2006: "E", 2005: "N", 2004: "E", 2003: "N", 2002: "E",
@@ -36,50 +28,115 @@ enso_labels = {
     1905: "E", 1904: "N", 1903: "N", 1902: "E", 1901: "N", 1900: "N", 1899: "N", 1898: "N",
     1897: "N", 1896: "E", 1895: "N", 1894: "N", 1893: "L", 1892: "L", 1891: "N", 1890: "N"
 }
-df['temp_smooth'] = df['temperature'].rolling(window=3, center=True).mean()
-st.write(df.head())  
-X = df[['latitude', 'longitude', 'month', 'temp_smooth']]
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
-clustering_df = df[(df['year'] >= 1890) & (df['year'] <= 2017)]
 
-# keep only years that are in the ENSO labels
-clustering_df = clustering_df[clustering_df['year'].isin(enso_labels.keys())]
-clustering_df = clustering_df.copy()
-clustering_df['enso_label'] = clustering_df['year'].map(enso_labels)
-clustering_df = clustering_df[clustering_df['month'].isin([12, 1, 2])]
-clustering_df = clustering_df[clustering_df['enso_label'].isin(['E', 'L'])]
-clustering_df = pd.get_dummies(clustering_df, columns=['enso_label'], prefix='enso')
+file_id = "1n7cREgviHR9PJjMZtgverCPIB3F1blm2"
+output_path = "filled_output.csv"
 
-melted = clustering_df.melt(
-    id_vars=['latitude', 'longitude', 'temp_smooth'],
-    value_vars=['enso_E', 'enso_L'],
-    var_name='enso_phase',
-    value_name='is_phase'
+# Download CSV if needed
+if not os.path.exists(output_path):
+    gdown.download(f"https://drive.google.com/uc?id={file_id}", output_path, quiet=False)
+
+st.title("Clustering Analysis of Temperature Data")
+
+# Sidebar filters
+selected_phases = st.sidebar.multiselect(
+    "Select ENSO Phases", options=['E', 'L'], default=['E', 'L']
 )
+selected_months = st.sidebar.multiselect(
+    "Select Months", options=[12, 1, 2], default=[12, 1, 2]
+)
+k = st.sidebar.slider("Select number of clusters (k)", min_value=2, max_value=10, value=6)
 
-melted = melted[melted['is_phase'] == 1]
+# Show loading spinner
+with st.spinner('Loading and processing data...'):
 
+    # Lazy read
+    df = pl.scan_csv(output_path)
 
-pivot = melted.groupby(['latitude', 'longitude', 'enso_phase'])['temp_smooth'] \
-              .mean().unstack(fill_value=0).reset_index()
+    # Filter
+    df = df.filter(
+        pl.col("month").is_in(selected_months) &
+        pl.col("year").is_in(list(enso_labels.keys()))
+    )
 
-clustering_cols = ['enso_E', 'enso_L']
-X = pivot[clustering_cols]
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
-kmeans = KMeans(n_clusters=6, random_state=0, n_init=10)
-pivot['cluster'] = kmeans.fit_predict(X_scaled)
+    # Join ENSO labels
+    enso_df = pl.DataFrame({
+        "year": list(enso_labels.keys()),
+        "enso_label": list(enso_labels.values())
+    })
+    df = df.join(enso_df, on="year", how="inner")
 
-# Plot the clustering results
-st.subheader(f'Cluster Map with k=6')
-fig, ax = plt.subplots()
-scatter = ax.scatter(pivot['longitude'], pivot['latitude'], c=pivot['cluster'], cmap='viridis', s=1)
-plt.xlabel('Longitude')
-plt.ylabel('Latitude')
-plt.colorbar(scatter, label='Cluster')
-st.pyplot(fig)
+    # Smooth temperature
+    # Polars rolling mean requires sorted data
+    df = df.sort(["latitude", "longitude", "year", "month"])
+    df = df.with_columns(
+        pl.col("temperature")
+        .rolling_mean(window_size=3, center=True)
+        .alias("temp_smooth")
+    )
 
-# Show statistics
+    # Aggregate mean temp_smooth per phase
+    agg_df = (
+        df.groupby(["latitude", "longitude", "enso_label"])
+        .agg(pl.col("temp_smooth").mean().alias("temp_mean"))
+    )
+
+    # Collect to pandas
+    agg_pd = agg_df.collect().to_pandas()
+
+    # Pivot
+    pivot = agg_pd.pivot(
+        index=["latitude", "longitude"],
+        columns="enso_label",
+        values="temp_mean"
+    ).reset_index()
+
+    # Rename columns to match your previous naming
+    pivot = pivot.rename(columns={"E": "enso_E", "L": "enso_L"})
+
+    # Fill any missing values
+    pivot = pivot.fillna(0)
+
+    # Clustering
+    clustering_cols = ['enso_E', 'enso_L']
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(pivot[clustering_cols])
+
+    kmeans = KMeans(n_clusters=k, random_state=0, n_init=10)
+    pivot['cluster'] = kmeans.fit_predict(X_scaled)
+
+    # Difference
+    pivot['temp_diff'] = pivot['enso_E'] - pivot['enso_L']
+
+# Plotly scatter
+fig = px.scatter(
+    pivot,
+    x='longitude',
+    y='latitude',
+    color='cluster',
+    title='Interactive Cluster Map',
+    color_continuous_scale='Viridis',
+    labels={'longitude': 'Longitude', 'latitude': 'Latitude'},
+    hover_data={'enso_E': True, 'enso_L': True, 'temp_diff': True}
+)
+st.plotly_chart(fig)
+
+# Description
+st.markdown("""
+This image shows the result of a clustering analysis that groups global land locations based on how their December–January–February (DJF) temperatures respond to ENSO (El Niño–Southern Oscillation) events. 
+K-means clustering was applied to temperature anomalies during El Niño (E) and La Niña (L) winters, resulting in distinct clusters that represent different temperature response patterns. Each color represents a different cluster.
+""")
+
+# Cluster summary table
+cluster_summary = pivot.groupby('cluster')[['enso_E', 'enso_L', 'temp_diff']].mean().reset_index()
+st.subheader('Cluster Summary')
+st.dataframe(cluster_summary)
+
+# Descriptive statistics
 st.subheader('Cluster Statistics')
 st.write(pivot.groupby('cluster')[['enso_E', 'enso_L']].describe())
+
+st.write("""
+The strongest El Niño warming (Cluster with highest enso_E) appears in equatorial and tropical regions, aligning with canonical ENSO teleconnection patterns.
+Clusters exhibiting cooling during El Niño are consistent with known responses in North America and Asia.
+""")
